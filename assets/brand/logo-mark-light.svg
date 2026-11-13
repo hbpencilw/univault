@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="markTitle markDesc">
+  <title id="markTitle">UniVault logo mark</title>
+  <desc id="markDesc">Monochrome white mark: a graduation cap inside a ring, with a tassel, for dark backgrounds.</desc>
+  <circle cx="256" cy="252" r="140" fill="none" stroke="#FFFFFF" stroke-width="22"/>
+  <path d="M256 180 L356 226 L256 272 L156 226 Z" fill="#FFFFFF"/>
+  <path d="M206 258 V298 Q206 312 220 312 H292 Q306 312 306 298 V258 Z" fill="#FFFFFF"/>
+  <line x1="356" y1="226" x2="356" y2="298" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="356" cy="306" r="8" fill="#FFFFFF"/>
+</svg>

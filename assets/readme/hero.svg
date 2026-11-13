@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="uniTitle uniDesc">
+  <title id="uniTitle">UniVault — archive Ed Discussion and Moodle, query offline</title>
+  <desc id="uniDesc">Apple-style dark hero: UniVault title, two-line value proposition, three icon-labeled sources, and a macOS window showing the login and sync commands. Icons: Lucide (ISC).</desc>
+  <!-- Icons: Lucide (ISC) — https://lucide.dev -->
+  <rect width="1200" height="420" fill="#000000"/>
+
+  <!-- left column -->
+  <text x="64" y="92" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="600" letter-spacing="1.6" fill="#8E8E93">OPEN-SOURCE COURSE ARCHIVER</text>
+  <text x="64" y="168" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="72" font-weight="600" letter-spacing="-1.2" fill="#FFFFFF">UniVault</text>
+  <text x="64" y="216" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#F2F2F7">Archive Ed Discussion</text>
+  <text x="64" y="254" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#EBEBF5" opacity="0.6">and Moodle. Query it offline.</text>
+
+  <!-- source lines with Lucide icons -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#EBEBF5">
+    <g stroke="#0A84FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="64" y="296" width="20" height="20" viewBox="0 0 24 24">
+        <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        <path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/>
+      </svg>
+    </g>
+    <text x="96" y="314" opacity="0.92">Ed Discussion · threads and Lessons</text>
+
+    <g stroke="#30D158" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="64" y="328" width="20" height="20" viewBox="0 0 24 24">
+        <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/>
+        <path d="M22 10v6"/>
+        <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>
+      </svg>
+    </g>
+    <text x="96" y="346" opacity="0.92">Moodle · files, pages, labels, notices</text>
+
+    <g stroke="#FF9F0A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="64" y="360" width="20" height="20" viewBox="0 0 24 24">
+        <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/>
+        <path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>
+      </svg>
+    </g>
+    <text x="96" y="378" opacity="0.92">One JSONL corpus · versioned, searchable</text>
+  </g>
+
+  <!-- macOS window -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <rect x="600" y="96" width="536" height="252" rx="14" fill="#1C1C1E"/>
+    <path d="M600 110a14 14 0 0 1 14-14h508a14 14 0 0 1 14 14v30H600z" fill="#2C2C2E"/>
+    <line x1="600" y1="140" x2="1136" y2="140" stroke="#38383A" stroke-width="1"/>
+    <circle cx="624" cy="119" r="6" fill="#FF453A"/>
+    <circle cx="646" cy="119" r="6" fill="#FFD60A"/>
+    <circle cx="668" cy="119" r="6" fill="#32D74B"/>
+    <text x="692" y="124" font-size="14" fill="#8E8E93">univault — zsh</text>
+
+    <g font-family="'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="19">
+      <text x="624" y="184" fill="#8E8E93">$</text>
+      <text x="648" y="184" fill="#FFFFFF">univault login</text>
+      <text x="648" y="212" fill="#30D158">✓ session saved (0600)</text>
+
+      <text x="624" y="252" fill="#8E8E93">$</text>
+      <text x="648" y="252" fill="#FFFFFF">univault sync</text>
+      <text x="648" y="280" fill="#EBEBF5" opacity="0.6">ed · threads + lessons</text>
+      <text x="648" y="304" fill="#EBEBF5" opacity="0.6">moodle · files + labels</text>
+      <text x="648" y="328" fill="#FF9F0A">→ univault.jsonl</text>
+    </g>
+  </g>
+</svg>

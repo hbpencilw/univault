@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""univault — one entry point for the whole archive workflow.
+
+  univault login     one-time Edge login (persistent profile, Playwright)
+  univault status    Ed token + Moodle session + scan manifest status
+  univault sync      Ed archives + Moodle scan/sync + unified corpus rebuild
+
+`sync` is the explicit archive command: it downloads Moodle course files and
+announcements for the courses selected (all by default). It never runs as a
+side effect of `login` or `status`.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+CONFIG_PATH = Path(os.environ.get("UNIVAULT_CONFIG", "~/.config/univault/config.json")).expanduser()
+
+
+def load_config() -> dict:
+    try:
+        if CONFIG_PATH.exists():
+            return json.loads(CONFIG_PATH.read_text()) or {}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+_CONFIG = load_config()
+LEARNING_ROOT = Path(
+    os.environ.get("UNIVAULT_LEARNING_ROOT")
+    or _CONFIG.get("learning_root")
+    or "~/courses"
+).expanduser()
+SCAN_DIR = LEARNING_ROOT / "_univault" / "scan"
+MANIFEST = SCAN_DIR / "_state" / "scan-latest.json"
+ED_UNITS = {str(k).upper(): int(v) for k, v in (_CONFIG.get("ed_units") or {}).items()}
+
+
+def _run(cmd: list[str]) -> int:
+    print("$", " ".join(cmd), flush=True)
+    return subprocess.run(cmd).returncode
+
+
+def ed_archives() -> list[tuple[str, Path]]:
+    """Existing per-course Ed archive dirs under the learning root."""
+    found = []
+    if not LEARNING_ROOT.exists():
+        return found
+    for path in LEARNING_ROOT.glob("*/*/memory/resources/ed"):
+        code = path.parts[-4].upper()
+        if code in ED_UNITS:
+            found.append((code, path))
+    return sorted(found)
+
+
+def cmd_login(args) -> int:
+    cmd = ["moodle-setup", "login", "--timeout", str(args.timeout)]
+    return _run(cmd)
+
+
+def cmd_status(args) -> int:
+    print(f"learning root : {LEARNING_ROOT}")
+    print(f"scan manifest : {MANIFEST} ({'present' if MANIFEST.exists() else 'missing'})")
+    token = Path.home() / ".config" / "edstem-cli" / "token"
+    print(f"Ed token      : {'present' if token.exists() else 'missing'}")
+    return _run(["moodle-setup", "status"])
+
+
+def _manifest_course(course_code: str) -> dict | None:
+    if not MANIFEST.exists():
+        return None
+    data = json.loads(MANIFEST.read_text())
+    for course in data.get("courses", []):
+        if str(course.get("code", "")).upper() == course_code.upper():
+            return course
+    return None
+
+
+def cmd_sync(args) -> int:
+    rc = 0
+
+    if not args.no_ed:
+        for code, path in ed_archives():
+            if args.course and code != args.course.upper():
+                continue
+            if args.dry_run:
+                print(f"[ed] {code} -> {path} (dry-run: skipped)")
+                continue
+            print(f"[ed] {code} -> {path}")
+            rc = rc or _run(["ed-archive", code, str(ED_UNITS[code]), str(path)])
+            if not args.no_lessons:
+                rc = rc or _run(["ed-lessons", code, str(ED_UNITS[code]), str(path)])
+
+    if not args.no_moodle:
+        status = subprocess.run(["moodle-setup", "status"], capture_output=True, text=True)
+        if status.returncode == 2:
+            print("[moodle] session expired — opening the Edge login window")
+            if _run(["moodle-setup", "login", "--timeout", str(args.login_timeout)]) != 0:
+                print("error: Moodle login failed", file=sys.stderr)
+                return 2
+        elif status.returncode not in (0,):
+            if status.returncode == 1 and not (Path.home() / ".config" / "univault" / "moodle-cookie").exists():
+                print("[moodle] no session yet — starting the Edge login window")
+                if _run(["moodle-setup", "login", "--timeout", str(args.login_timeout)]) != 0:
+                    print("error: Moodle login failed", file=sys.stderr)
+                    return 2
+            else:
+                print(status.stderr.strip() or "error: Moodle session check failed", file=sys.stderr)
+                return status.returncode
+
+        if not MANIFEST.exists() or args.rescan:
+            rc = rc or _run(["moodle-archive", "scan", "--dest", str(SCAN_DIR),
+                             "--learning-root", str(LEARNING_ROOT)])
+
+        sync_cmd = ["moodle-archive", "sync", "--from-scan", str(MANIFEST)]
+        if args.course:
+            course = _manifest_course(args.course)
+            if course is None:
+                print(f"error: course {args.course} not found in the scan manifest", file=sys.stderr)
+                return 1
+            sync_cmd += ["--course-id", str(course["id"])]
+        if args.dry_run:
+            sync_cmd.append("--dry-run")
+        if args.course:
+            sync_cmd += ["--course-id", str(_manifest_course(args.course)["id"])]
+        rc = rc or _run(sync_cmd)
+
+        if not args.dry_run and MANIFEST.exists():
+            for course in json.loads(MANIFEST.read_text()).get("courses", []):
+                directory = Path(course.get("suggested_dir") or "")
+                if not directory.exists():
+                    continue
+                out = directory.parent / "univault.jsonl"
+                rc = rc or _run(["univault-normalize", str(directory), "-o", str(out)])
+    return rc
+
+
+def main() -> None:
+    global LEARNING_ROOT, SCAN_DIR, MANIFEST
+    ap = argparse.ArgumentParser(prog="univault", description="UniVault: login, status and archive sync.")
+    ap.add_argument("--learning-root", default=str(LEARNING_ROOT),
+                    help="root of the university study workspace")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("login", help="one-time Edge login with a persistent profile")
+    p.add_argument("--timeout", type=int, default=600)
+    p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("status", help="Ed token, Moodle session and scan manifest status")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("sync", help="archive Ed + Moodle (explicit download command)")
+    p.add_argument("--course", help="limit to one unit code (e.g. UNIT1001)")
+    p.add_argument("--rescan", action="store_true", help="run Moodle scan before syncing")
+    p.add_argument("--dry-run", action="store_true", help="plan only; no downloads")
+    p.add_argument("--no-ed", action="store_true")
+    p.add_argument("--no-lessons", action="store_true", help="skip Ed Lessons even when Ed threads are synced")
+    p.add_argument("--no-moodle", action="store_true")
+    p.add_argument("--login-timeout", type=int, default=600)
+    p.set_defaults(func=cmd_sync)
+
+    args = ap.parse_args()
+    LEARNING_ROOT = Path(args.learning_root).expanduser()
+    SCAN_DIR = LEARNING_ROOT / "_univault" / "scan"
+    MANIFEST = SCAN_DIR / "_state" / "scan-latest.json"
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,14 @@
+{
+  "name": "univault",
+  "version": "0.3.1-beta",
+  "description": "Archive Ed Discussion (threads and Lessons) and Moodle (announcements, files, pages, labels) into a versioned local corpus. Monash first, then Go8.",
+  "author": {
+    "name": "hbpencilw",
+    "email": "hbpencilw@gmail.com"
+  },
+  "homepage": "https://github.com/hbpencilw/univault",
+  "repository": "https://github.com/hbpencilw/univault",
+  "license": "MIT",
+  "keywords": ["university", "moodle", "ed-discussion", "archiver", "monash"],
+  "skills": "./skills"
+}

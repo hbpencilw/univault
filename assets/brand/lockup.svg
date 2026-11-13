@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 240" role="img" aria-labelledby="lockTitle lockDesc">
+  <title id="lockTitle">UniVault logo lockup</title>
+  <desc id="lockDesc">Horizontal lockup for dark backgrounds: graduation cap in a vault ring, UniVault wordmark and COURSE ARCHIVER tagline.</desc>
+
+  <g transform="translate(48 76) scale(0.171875)" fill="none" stroke="#FFFFFF">
+    <circle cx="256" cy="252" r="140" stroke-width="22"/>
+    <path d="M256 180 L356 226 L256 272 L156 226 Z" fill="#FFFFFF" stroke="none"/>
+    <path d="M206 258 V298 Q206 312 220 312 H292 Q306 312 306 298 V258 Z" fill="#FFFFFF" stroke="none"/>
+    <line x1="356" y1="226" x2="356" y2="298" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="356" cy="306" r="8" fill="#FFFFFF" stroke="none"/>
+  </g>
+
+  <text x="152" y="150" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="72" font-weight="600" letter-spacing="-1.2" fill="#FFFFFF">UniVault</text>
+  <text x="154" y="184" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="600" letter-spacing="2.2" fill="#8E8E93">COURSE ARCHIVER</text>
+</svg>

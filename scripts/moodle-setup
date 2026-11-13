@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""moodle-setup — UniVault Moodle session management (cookie based).
+
+Subcommands:
+  import-cookie   paste the Cookie header from a logged-in Edge session
+  status          validate the stored session and show course access
+  probe           probe read-only Moodle AJAX capabilities (P0 report)
+  clear           delete the stored cookie and cached capabilities
+
+The only accepted credential is the Cookie header the user copies from Edge
+(whole header or a single value). It is stored at
+~/.config/univault/moodle-cookie (0600) and never printed.
+
+Exit codes: 0 ok · 1 usage/no cookie · 2 authentication failed ·
+3 network/blocked · 4 partial capability (probe).
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+def _lib_root() -> str:
+    """Locate the directory that contains the `lib` package.
+
+    Order: $UNIVAULT_LIB_ROOT, the script's real location (repo layout, also
+    when installed via symlink), then the installed copy at ~/.local/lib/univault.
+    """
+    candidates = []
+    env = os.environ.get("UNIVAULT_LIB_ROOT")
+    if env:
+        candidates.append(env)
+    candidates.append(str(Path(__file__).resolve().parent))
+    candidates.append(os.path.expanduser("~/.local/lib/univault"))
+    for c in candidates:
+        if os.path.isdir(os.path.join(c, "lib")):
+            return c
+    sys.exit("error: cannot locate the UniVault lib/ package (set UNIVAULT_LIB_ROOT)")
+
+
+sys.path.insert(0, _lib_root())
+
+from lib import moodle_auth, moodle_api  # noqa: E402
+from lib.moodle_errors import (  # noqa: E402
+    AuthExpired,
+    BlockedUrl,
+    MoodleError,
+    NetworkFailed,
+    RateLimited,
+    ServerError,
+)
+from lib.moodle_http import HttpClient  # noqa: E402
+
+EXIT_OK, EXIT_USAGE, EXIT_AUTH, EXIT_NET, EXIT_PARTIAL = 0, 1, 2, 3, 4
+
+
+def _fail(err: MoodleError, client: HttpClient | None = None) -> int:
+    msg = err.message
+    if client is not None:
+        msg = client.redact(msg)
+    print(f"error [{err.category}]: {msg}", file=sys.stderr)
+    if isinstance(err, AuthExpired):
+        return EXIT_AUTH
+    if isinstance(err, (NetworkFailed, RateLimited, ServerError, BlockedUrl)):
+        return EXIT_NET
+    return EXIT_USAGE
+
+
+def _load_session(args):
+    client, payload = moodle_auth.make_client(args.base)
+    session = moodle_auth.validate_session(client, args.base)
+    return client, payload, session
+
+
+def _print_session(client, payload, session):
+    print(f"host:        {client.host}")
+    print(f"cookie:      {moodle_auth.cookie_shape(moodle_auth.parse_cookie_header(payload['cookie']))}")
+    print(f"saved at:    {payload.get('saved_at')}")
+    print(f"site:        {session.sitename or 'unknown'}")
+    print(f"moodle:      {session.release or 'unknown release'}")
+    print(f"user id:     {session.userid or 'unknown'}")
+    print(f"sesskey:     {'present' if session.sesskey else 'MISSING'}")
+    print(f"courses:     {len(session.course_ids)} linked from /my/")
+    for w in session.warnings:
+        print(f"warning:     {w}")
+    for w in moodle_auth.permissions_report():
+        print(f"warning:     {w}")
+
+
+def _venv_python() -> str | None:
+    p = Path.home() / ".local" / "lib" / "univault" / "venv" / "bin" / "python"
+    return str(p) if p.exists() else None
+
+
+def _ensure_playwright() -> str | None:
+    """Return the venv python, bootstrapping Playwright on first use."""
+    py = _venv_python()
+    if py:
+        return py
+    uv = shutil.which("uv")
+    if not uv:
+        print("error: Playwright is not installed and uv is unavailable.\n"
+              "  run: python3 -m venv ~/.local/lib/univault/venv && "
+              "~/.local/lib/univault/venv/bin/pip install playwright", file=sys.stderr)
+        return None
+    venv = Path.home() / ".local" / "lib" / "univault" / "venv"
+    print("first run: installing Playwright into ~/.local/lib/univault/venv …", file=sys.stderr)
+    subprocess.run([uv, "venv", "--python", "3.14", str(venv)], check=False)
+    py = str(venv / "bin" / "python")
+    subprocess.run([uv, "pip", "install", "--python", py, "playwright"], check=False)
+    return py if Path(py).exists() else None
+
+
+def cmd_login(args) -> int:
+    py = _ensure_playwright()
+    if not py:
+        return EXIT_USAGE
+    helper = Path(_lib_root()) / "lib" / "moodle_login.py"
+    cmd = [py, str(helper), "--base", args.base, "--timeout", str(args.timeout)]
+    if args.profile:
+        cmd += ["--profile", args.profile]
+    if args.check:
+        cmd.append("--check")
+    rc = subprocess.run(cmd).returncode
+    if args.check:
+        return EXIT_OK if rc == 0 else EXIT_AUTH
+    if rc != 0:
+        return EXIT_AUTH
+    try:
+        client, payload, session = _load_session(args)
+    except MoodleError as e:
+        return _fail(e)
+    print("session check:")
+    _print_session(client, payload, session)
+    return EXIT_OK
+
+
+def cmd_import(args) -> int:
+    try:
+        if args.from_file:
+            raw = moodle_auth.import_from_file(args.from_file)
+        elif args.from_clipboard:
+            raw = moodle_auth.import_from_clipboard()
+        else:
+            raw = moodle_auth.import_from_stdin()
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"error: could not read cookie input: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        pairs = moodle_auth.parse_cookie_header(raw)
+    except ValueError as e:
+        print(f"error: invalid cookie header: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    payload = moodle_auth.save_cookie(raw, args.base)
+    print(f"cookie saved: {moodle_auth.COOKIE_FILE} (0600), {len(pairs)} pair(s): "
+          f"{moodle_auth.cookie_shape(pairs)}")
+    try:
+        client, payload, session = _load_session(args)
+    except MoodleError as e:
+        return _fail(e)
+    print("session check:")
+    _print_session(client, payload, session)
+    print(f"\napi calls used: {client.request_count}")
+    return EXIT_OK
+
+
+def cmd_status(args) -> int:
+    try:
+        client, payload, session = _load_session(args)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except MoodleError as e:
+        return _fail(e)
+    if args.json:
+        print(json.dumps({
+            "host": client.host,
+            "saved_at": payload.get("saved_at"),
+            "sitename": session.sitename,
+            "release": session.release,
+            "userid": session.userid,
+            "sesskey_present": bool(session.sesskey),
+            "course_count": len(session.course_ids),
+            "warnings": session.warnings + moodle_auth.permissions_report(),
+            "capabilities_age_hours": _capabilities_age_hours(),
+        }, indent=2))
+        return EXIT_OK
+    _print_session(client, payload, session)
+    age = _capabilities_age_hours()
+    if age is not None:
+        print(f"capabilities: last probed {age:.1f} h ago (run 'moodle-setup probe' to refresh)")
+    print(f"api calls used: {client.request_count}")
+    return EXIT_OK
+
+
+def _capabilities_age_hours() -> float | None:
+    p = moodle_auth.CAPABILITIES_FILE
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text())
+        ts = data.get("probed_epoch")
+        return (time.time() - ts) / 3600 if ts else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def cmd_probe(args) -> int:
+    try:
+        client, payload, session = _load_session(args)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except MoodleError as e:
+        return _fail(e)
+    if not session.sesskey:
+        print("error: no sesskey on /my/; cannot call the AJAX endpoint. Re-export the cookie.",
+              file=sys.stderr)
+        return EXIT_AUTH
+
+    summary = moodle_api.probe(client, session.sesskey, delay=args.delay)
+    summary["release"] = session.release
+    summary["probed_epoch"] = time.time()
+    summary["sesskey_present"] = True
+    moodle_auth.ensure_config_dir()
+    tmp = moodle_auth.CAPABILITIES_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(summary, indent=2))
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, moodle_auth.CAPABILITIES_FILE)
+
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"host: {summary['host']}  release: {summary['release'] or 'unknown'}")
+        print(f"{'function':<58} {'status':<18} fallback")
+        print("-" * 92)
+        for r in summary["functions"]:
+            print(f"{r['function']:<58} {r['status']:<18} {r.get('fallback', '')}")
+        print(f"\nsupported {summary['supported']}/{summary['total']} -> "
+              f"{moodle_auth.CAPABILITIES_FILE}")
+    discovery = any(
+        r["function"] in ("core_course_get_enrolled_courses_by_timeline_classification",
+                          "core_enrol_get_users_courses") and r["status"] == "supported"
+        for r in summary["functions"])
+    if not discovery:
+        print("result: no course-discovery function works; HTML fallback is required.", file=sys.stderr)
+        return EXIT_NET
+    incomplete = [r for r in summary["functions"] if r["status"] != "supported"]
+    return EXIT_PARTIAL if incomplete else EXIT_OK
+
+
+def cmd_clear(args) -> int:
+    if not args.yes:
+        answer = input("delete stored Moodle cookie and capability cache? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("aborted")
+            return EXIT_USAGE
+    removed = moodle_auth.clear_cookie()
+    print("cleared" if removed else "nothing to clear")
+    return EXIT_OK
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        prog="moodle-setup",
+        description="UniVault Moodle session management (cookie based, standard library only).",
+    )
+    ap.add_argument("--base", default=moodle_auth.DEFAULT_BASE,
+                    help="Moodle base URL (default: %(default)s)")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("import-cookie", help="import the Cookie header from a logged-in Edge session")
+    src = p.add_mutually_exclusive_group()
+    src.add_argument("--from-stdin", action="store_true", help="read with hidden input (default)")
+    src.add_argument("--from-file", metavar="PATH", help="read the header from a file")
+    src.add_argument("--from-clipboard", action="store_true", help="read from the macOS clipboard")
+    p.set_defaults(func=cmd_import)
+
+    p = sub.add_parser("login", help="one-time Edge login with a persistent profile (Playwright)")
+    p.add_argument("--timeout", type=int, default=600, help="seconds to wait for the login (default 600)")
+    p.add_argument("--profile", help="profile directory (default: platform app-support dir)")
+    p.add_argument("--check", action="store_true", help="headless check of the stored profile only")
+    p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("status", help="validate the stored session")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("probe", help="probe read-only Moodle AJAX capabilities")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--delay", type=float, default=1.0, help="seconds between probe calls")
+    p.set_defaults(func=cmd_probe)
+
+    p = sub.add_parser("clear", help="delete stored cookie and cached capabilities")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=cmd_clear)
+
+    args = ap.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()

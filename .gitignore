@@ -1,0 +1,35 @@
+# Local reference sources and rollback backups (third-party licences, large trees)
+references/
+
+# macOS / editor noise
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+.vscode/
+.idea/
+
+# Python caches and virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# Test residue and temporary outputs
+_var_folders_*
+*.tmp
+*.part
+*.bak
+
+# Credentials and personal course archives (defence in depth)
+*cookie*
+*.jsonl
+_univault/
+.env
+
+# Local agent/tool state
+.mimosa/
+.v2c/
+.video_agent/

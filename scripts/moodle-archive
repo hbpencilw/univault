@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""moodle-archive — UniVault Moodle scan / sync CLI.
+
+Subcommands:
+  scan     discover courses, structure and resources; writes a manifest and a
+           report. Never downloads course files.
+  status   show session state, capability cache age and last scan summary
+  report   print the latest scan report (markdown, or JSON with --json)
+  sync     archive contents explicitly (not implemented yet — next iteration)
+
+Session cookie comes from `moodle-setup import-cookie`.
+Exit codes: 0 ok · 1 usage · 2 auth failed · 3 network/blocked · 4 partial.
+"""
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def _lib_root() -> str:
+    candidates = []
+    env = os.environ.get("UNIVAULT_LIB_ROOT")
+    if env:
+        candidates.append(env)
+    candidates.append(str(Path(__file__).resolve().parent))
+    candidates.append(os.path.expanduser("~/.local/lib/univault"))
+    for c in candidates:
+        if os.path.isdir(os.path.join(c, "lib")):
+            return c
+    sys.exit("error: cannot locate the UniVault lib/ package (set UNIVAULT_LIB_ROOT)")
+
+
+sys.path.insert(0, _lib_root())
+
+from lib import moodle_auth, moodle_report, moodle_scan, moodle_sync  # noqa: E402
+from lib.moodle_errors import (  # noqa: E402
+    AuthExpired,
+    BlockedUrl,
+    MoodleError,
+    NetworkFailed,
+    RateLimited,
+    ServerError,
+)
+
+EXIT_OK, EXIT_USAGE, EXIT_AUTH, EXIT_NET, EXIT_PARTIAL = 0, 1, 2, 3, 4
+
+
+def _fail(err: MoodleError, client=None) -> int:
+    msg = client.redact(err.message) if client is not None else err.message
+    print(f"error [{err.category}]: {msg}", file=sys.stderr)
+    if isinstance(err, AuthExpired):
+        print("hint: the Moodle session has expired. In Edge: log in again, copy the whole "
+              "Cookie header (DevTools → Network → Request Headers), then run:\n"
+              "      moodle-setup import-cookie --from-clipboard", file=sys.stderr)
+        return EXIT_AUTH
+    if isinstance(err, (NetworkFailed, RateLimited, ServerError, BlockedUrl)):
+        return EXIT_NET
+    return EXIT_USAGE
+
+
+def _session(args):
+    client, payload = moodle_auth.make_client(args.base, min_interval=args.delay)
+    session = moodle_auth.validate_session(client, args.base)
+    return client, payload, session
+
+
+def cmd_scan(args) -> int:
+    try:
+        client, payload, session = _session(args)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except MoodleError as e:
+        return _fail(e)
+    if not session.sesskey:
+        print("error: no sesskey on /my/; re-export the cookie", file=sys.stderr)
+        return EXIT_AUTH
+    try:
+        manifest = moodle_scan.scan(
+            client, session, args.dest,
+            course_ids=args.course_id,
+            learning_root=args.learning_root,
+            resolve_links=not args.no_resolve_links,
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except MoodleError as e:
+        return _fail(e, client)
+
+    if args.json:
+        print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    else:
+        t = manifest.get("totals", {})
+        print(f"scan {manifest['scan_id']} · {manifest['status']} · host {manifest['host']}")
+        print(f"courses {t.get('courses', 0)} · activities {t.get('activities', 0)} · "
+              f"files {t.get('files', 0)} · announcements {t.get('announcements', 0)} · "
+              f"unknown sizes {t.get('unknown_sizes', 0)}")
+        for c in manifest.get("courses", []):
+            files = sum(len(r.get("files") or []) for r in c.get("resources", []))
+            print(f"  {c.get('code'):<10} {str(c.get('shortname'))[:40]:<40} "
+                  f"sections={c.get('sections'):<3} files={files:<3} ann={len(c.get('announcements') or []):<3} "
+                  f"errors={len(c.get('errors') or [])}")
+        print(f"manifest: {os.path.join(moodle_scan.safe_dir(args.dest), '_state', 'scan-latest.json')}")
+    return EXIT_PARTIAL if manifest.get("status") == "partial" else EXIT_OK
+
+
+def cmd_status(args) -> int:
+    try:
+        client, payload, session = _session(args)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    except MoodleError as e:
+        return _fail(e)
+    caps_age = None
+    caps_path = moodle_auth.CAPABILITIES_FILE
+    if caps_path.exists():
+        try:
+            caps = json.loads(caps_path.read_text())
+            caps_age = (time_now() - caps.get("probed_epoch", 0)) / 3600 if caps.get("probed_epoch") else None
+            summary = f"{caps.get('supported')}/{caps.get('total')} read-only functions supported"
+        except (json.JSONDecodeError, OSError):
+            summary = "unreadable capability cache"
+    else:
+        summary = "not probed yet (run: moodle-setup probe)"
+    out = {
+        "host": client.host,
+        "saved_at": payload.get("saved_at"),
+        "sitename": session.sitename,
+        "userid": session.userid,
+        "sesskey_present": bool(session.sesskey),
+        "capabilities": summary,
+        "capabilities_age_hours": round(caps_age, 1) if caps_age is not None else None,
+    }
+    if args.json:
+        print(json.dumps(out, indent=2))
+        return EXIT_OK
+    for k, v in out.items():
+        print(f"{k:<24} {v}")
+    return EXIT_OK
+
+
+def time_now() -> float:
+    import time
+    return time.time()
+
+
+def cmd_report(args) -> int:
+    if args.manifest:
+        path = os.path.expanduser(args.manifest)
+    else:
+        if not args.dest:
+            print("error: pass --dest or --manifest", file=sys.stderr)
+            return EXIT_USAGE
+        path = os.path.join(moodle_scan.safe_dir(args.dest), "_state", "scan-latest.json")
+    if not os.path.exists(path):
+        print(f"error: no scan manifest at {path}", file=sys.stderr)
+        return EXIT_USAGE
+    manifest = json.loads(Path(path).read_text())
+    if args.json:
+        print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    else:
+        print(moodle_report.scan_markdown(manifest))
+    return EXIT_OK
+
+
+def cmd_sync(args) -> int:
+    manifest_path = os.path.expanduser(args.from_scan)
+    if not os.path.exists(manifest_path):
+        print(f"error: scan manifest not found: {manifest_path}", file=sys.stderr)
+        return EXIT_USAGE
+    manifest = json.loads(Path(manifest_path).read_text())
+    client = session = None
+    if not args.dry_run:
+        try:
+            client, _payload = moodle_auth.make_client(args.base, min_interval=args.delay)
+            session = moodle_auth.validate_session(client, args.base)
+        except FileNotFoundError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return EXIT_USAGE
+        except MoodleError as e:
+            return _fail(e)
+    max_bytes = args.max_mb * 1024 * 1024 if args.max_mb else None
+    try:
+        result = moodle_sync.sync(
+            client, session, manifest,
+            dest_root=args.dest_root,
+            course_ids=args.course_id,
+            dry_run=args.dry_run,
+            max_bytes=max_bytes,
+            cmids=args.cmid,
+            discussion_ids=args.discussion_id,
+            progress=lambda m: print(m, flush=True),
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    totals = result["totals"]
+    selection = result.get("selection") or {}
+    if selection.get("cmids") or selection.get("discussion_ids"):
+        print(f"selection: cmids={selection.get('cmids')} discussions={selection.get('discussion_ids')}")
+    print(f"sync {result['sync_id']} · {result['status']} · "
+          f"courses {totals['courses']} · new {totals['new']} · updated {totals['updated']} · "
+          f"unchanged {totals['unchanged']} · planned {totals.get('planned', 0)} · "
+          f"failed {totals['failed']} · metadata-only {totals['skipped']} · bytes {totals['bytes']}"
+          + (" (dry-run)" if result.get("dry_run") else ""))
+    print(f"labels {totals.get('labels', 0)} · section summaries {totals.get('section_summaries', 0)} · "
+          f"assessment widgets skipped {totals.get('assessment_widgets_skipped', 0)} · "
+          f"announcements: discussions {totals.get('discussions', 0)} · posts {totals.get('posts', 0)} · "
+          f"replies {totals.get('replies', 0)} · attachments {totals.get('attachments', 0)}")
+    for course in result["courses"]:
+        print(f"  {course['course'].get('code')}: new={course['new']} updated={course['updated']} "
+              f"unchanged={course['unchanged']} planned={course.get('planned', 0)} "
+              f"failed={course['failed']} skipped={course['skipped']}")
+    return EXIT_PARTIAL if result["status"] == "partial" else EXIT_OK
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="moodle-archive",
+                                 description="UniVault Moodle scan/sync (cookie session, standard library only).")
+    ap.add_argument("--base", default=moodle_auth.DEFAULT_BASE)
+    ap.add_argument("--delay", type=float, default=1.0, help="seconds between requests")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("scan", help="discover courses/structure/resources (no downloads)")
+    p.add_argument("--dest", required=True, help="scan output directory")
+    p.add_argument("--course-id", type=int, action="append", default=[], help="limit to course id (repeatable)")
+    p.add_argument("--learning-root", help="root for suggested per-course paths")
+    p.add_argument("--no-resolve-links", action="store_true",
+                   help="skip fetching activity pages (files counted from structure only)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("status", help="session + capability + last scan status")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("report", help="print the latest scan report")
+    p.add_argument("--dest", help="scan output directory")
+    p.add_argument("--manifest", help="explicit manifest path")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("sync", help="archive contents explicitly (downloads files/pages/announcements)")
+    p.add_argument("--from-scan", required=True, help="scan manifest (scan-latest.json)")
+    p.add_argument("--dest-root", help="override per-course destination root (default: manifest suggested_dir)")
+    p.add_argument("--course-id", type=int, action="append", default=[], help="limit to course id (repeatable)")
+    p.add_argument("--cmid", type=int, action="append", default=[], help="archive only this course module id (repeatable)")
+    p.add_argument("--discussion-id", type=int, action="append", default=[],
+                   help="archive only this announcement discussion id (repeatable)")
+    p.add_argument("--dry-run", action="store_true", help="plan only; no network, no writes")
+    p.add_argument("--max-mb", type=int, default=None, help="optional per-file size cap in MB (no default cap)")
+    p.set_defaults(func=cmd_sync)
+
+    args = ap.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()

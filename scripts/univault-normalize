@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""univault-normalize — merge platform archives into the unified UniVault corpus.
+
+Reads one or more platform archive directories, normalises every item to the
+unified UniVault schema, and writes one JSONL file. Offline and idempotent:
+output depends only on the inputs, so it can be re-run after every sync.
+
+Platform detection (per directory, by marker file):
+  threads.jsonl -> ed      raw {thread, users} records written by ed-archive
+  moodle.jsonl  -> moodle  unified records (adapter target, see univault-moodle)
+  canvas.jsonl  -> canvas  unified records (adapter target)
+
+Usage:
+  univault-normalize <archive_dir>... -o univault.jsonl [--course UNIT1001]
+
+Course code resolution: --course wins; otherwise the first ancestor directory
+named like a unit code (e.g. .../unit1001/...) is used; otherwise null.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+from collections import Counter
+
+STAFF_ROLES = {"admin", "staff", "teacher", "instructor", "ta", "moderator"}
+UNIT_CODE_RE = re.compile(r"^[a-z]{3}\d{4}$", re.IGNORECASE)
+MARKERS = (("threads.jsonl", "ed"), ("moodle.jsonl", "moodle"), ("canvas.jsonl", "canvas"))
+
+
+def detect_platform(d):
+    for marker, plat in MARKERS:
+        if os.path.isfile(os.path.join(d, marker)):
+            return plat, marker
+    return None, None
+
+
+def guess_course_code(d):
+    p = os.path.abspath(d)
+    while True:
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        name = os.path.basename(p)
+        if UNIT_CODE_RE.match(name):
+            return name.upper()
+        p = parent
+
+
+def author(users, uid):
+    u = users.get(uid) or {}
+    return {"name": u.get("name") or "Anonymous", "staff": (u or {}).get("course_role") in STAFF_ROLES}
+
+
+def body(obj):
+    doc = obj.get("document")
+    return doc if isinstance(doc, str) and doc.strip() else None
+
+
+def norm_ed(raw, code):
+    t = raw.get("thread") or {}
+    users = {u.get("id"): u for u in raw.get("users") or [] if isinstance(u, dict)}
+    cid, tid = t.get("course_id"), t.get("id")
+    if tid is None:
+        return None
+    return {
+        "platform": "ed",
+        "kind": "announcement" if t.get("type") == "announcement" else "thread",
+        "course": {"code": code, "id": cid},
+        "id": tid,
+        "number": t.get("number"),
+        "type": t.get("type"),
+        "title": t.get("title"),
+        "category": " / ".join(x for x in (t.get("category"), t.get("subcategory"), t.get("subsubcategory")) if x) or None,
+        "created_at": t.get("created_at"),
+        "updated_at": t.get("updated_at"),
+        "url": f"https://edstem.org/au/courses/{cid}/discussion/{tid}" if cid and tid else None,
+        "author": author(users, t.get("user_id")),
+        "flags": {
+            "answered": bool(t.get("is_answered")),
+            "staff_answered": bool(t.get("is_staff_answered")),
+            "anonymous": bool(t.get("is_anonymous")),
+            "pinned": bool(t.get("is_pinned")),
+            "locked": bool(t.get("is_locked")),
+            "private": bool(t.get("is_private")),
+            "endorsed": bool(t.get("is_endorsed")) if t.get("is_endorsed") is not None else None,
+        },
+        "counts": {"replies": t.get("reply_count", 0), "views": t.get("view_count"), "votes": t.get("vote_count")},
+        "body_md": body(t),
+        "answers": [
+            {
+                "author": author(users, a.get("user_id")),
+                "created_at": a.get("created_at"),
+                "endorsed": bool(a.get("is_endorsed")),
+                "body_md": body(a),
+                "comments": [
+                    {"author": author(users, c.get("user_id")), "created_at": c.get("created_at"), "body_md": body(c)}
+                    for c in a.get("comments") or []
+                    if isinstance(c, dict)
+                ],
+            }
+            for a in t.get("answers") or []
+            if isinstance(a, dict)
+        ],
+        "comments": [
+            {"author": author(users, c.get("user_id")), "created_at": c.get("created_at"), "body_md": body(c)}
+            for c in t.get("comments") or []
+            if isinstance(c, dict)
+        ],
+    }
+
+
+def passthrough(raw, plat, code):
+    """moodle/canvas adapters write unified records directly; enforce platform
+    and course code here so callers don't have to."""
+    if not isinstance(raw, dict) or raw.get("id") is None or not raw.get("kind"):
+        return None
+    raw["platform"] = plat
+    course = raw.get("course") or {}
+    if not course.get("code") and code:
+        course["code"] = code
+        raw["course"] = course
+    return raw
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Normalise platform archives into one UniVault JSONL corpus.")
+    ap.add_argument("dirs", nargs="+", help="archive directories (ed/moodle/canvas)")
+    ap.add_argument("-o", "--out", required=True, help="output JSONL path")
+    ap.add_argument("--course", help="override course code for all inputs")
+    args = ap.parse_args()
+
+    records, skipped = {}, Counter()
+    for d in args.dirs:
+        plat, marker = detect_platform(d)
+        if not plat:
+            sys.exit(f"univault-normalize: no platform marker in {d} (need one of {[m for m, _ in MARKERS]})")
+        code = args.course or guess_course_code(d)
+        with open(os.path.join(d, marker)) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    skipped[f"{plat}:unparseable"] += 1
+                    continue
+                rec = norm_ed(raw, code) if plat == "ed" else passthrough(raw, plat, code)
+                if rec is None:
+                    skipped[plat + ":malformed"] += 1
+                    continue
+                key = (rec["platform"], (rec.get("course") or {}).get("id"), rec["id"])
+                if key in records:
+                    skipped[plat + ":duplicate"] += 1
+                    continue
+                records[key] = rec
+
+    ordered = sorted(records.values(), key=lambda r: ((r.get("course") or {}).get("code") or "zzz", r.get("created_at") or ""))
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "w") as fh:
+        for rec in ordered:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    kinds = Counter((r["platform"], r["kind"]) for r in ordered)
+    courses = Counter(f"{(r.get('course') or {}).get('code') or '?'}({r['platform']})" for r in ordered)
+    print(f"univault-normalize: {len(ordered)} records -> {out}")
+    for (plat, kind), n in sorted(kinds.items()):
+        print(f"  {plat}/{kind}: {n}")
+    for c, n in sorted(courses.items()):
+        print(f"  course {c}: {n}")
+    for reason, n in sorted(skipped.items()):
+        print(f"  skipped {reason}: {n}")
+
+
+if __name__ == "__main__":
+    main()

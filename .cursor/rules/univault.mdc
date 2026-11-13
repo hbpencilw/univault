@@ -1,0 +1,26 @@
+---
+description: UniVault — CLI usage and safety rules for course archiving
+globs:
+alwaysApply: true
+---
+
+# UniVault
+
+Read `AGENTS.md` at the repository root for the full briefing. Key rules:
+
+- UniVault is CLI-first: `univault`, `moodle-archive`, `moodle-setup`,
+  `ed-archive`, `ed-lessons`, `univault-normalize`.
+- `scan` discovers only; `sync` downloads only when the user explicitly asks.
+- Remote platforms are read-only; never post, submit, or bypass stealth content.
+- Never read, print, or commit `~/.config/univault/moodle-cookie` or Ed tokens.
+- Archives live under the user's `learning_root` (default `~/courses`), not in
+  this repository.
+
+Common commands:
+
+```bash
+univault status
+univault sync --dry-run
+moodle-archive scan --dest ~/courses/_scan --learning-root ~/courses --json
+moodle-archive sync --from-scan ~/courses/_scan/_state/scan-latest.json --course-id <course-id>
+```

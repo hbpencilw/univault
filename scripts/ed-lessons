@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""ed-lessons — archive Ed Discussion Lessons (content, quiz prompts, PDFs).
+
+Read-only. Uses the personal Ed API token (same store as ed-archive).
+No attempt/answer data is fetched; questions are archived as prompts only.
+
+Usage:
+  ed-lessons <CODE> <COURSE_ID> <DEST> [--delay 1.0] [--no-files] [--list-only]
+
+Writes into DEST (the course's memory/resources/ed directory):
+  lessons.jsonl · ed_lessons.md · lesson_files/<NN>-<slug>/<SS>-<slug>.pdf
+Resumable: lesson ids already in lessons.jsonl are skipped.
+"""
+import argparse
+import os
+import sys
+from pathlib import Path
+
+
+def _lib_root() -> str:
+    candidates = []
+    env = os.environ.get("UNIVAULT_LIB_ROOT")
+    if env:
+        candidates.append(env)
+    candidates.append(str(Path(__file__).resolve().parent))
+    candidates.append(os.path.expanduser("~/.local/lib/univault"))
+    for c in candidates:
+        if os.path.isdir(os.path.join(c, "lib")):
+            return c
+    sys.exit("error: cannot locate the UniVault lib/ package (set UNIVAULT_LIB_ROOT)")
+
+
+sys.path.insert(0, _lib_root())
+
+from lib import ed_lessons  # noqa: E402
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="ed-lessons", description="Archive Ed Lessons (content, quiz prompts, PDFs).")
+    ap.add_argument("code", help="course code, e.g. UNIT1001")
+    ap.add_argument("cid", type=int, help="Ed numeric course id")
+    ap.add_argument("dest", help="destination directory (course memory/resources/ed)")
+    ap.add_argument("--delay", type=float, default=1.0, help="seconds between API calls")
+    ap.add_argument("--no-files", action="store_true", help="record PDF metadata without downloading")
+    ap.add_argument("--list-only", action="store_true", help="list lesson counts only; write nothing")
+    args = ap.parse_args()
+
+    try:
+        stats = ed_lessons.archive(
+            args.cid, args.dest,
+            delay=args.delay,
+            download_files=not args.no_files,
+            list_only=args.list_only,
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.list_only:
+        print(f"[{args.code}] lessons: {stats['lessons']} (list only; nothing written)")
+    else:
+        print(f"[{args.code}] done: {stats['new']} new, {stats['skipped']} skipped, "
+              f"{stats['pdfs']} PDFs, {stats['errors']} errors -> {args.dest}")
+
+
+if __name__ == "__main__":
+    main()

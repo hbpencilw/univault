@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""ed-archive — archive every Ed Discussion thread in a course to local files.
+
+Talks to the official Ed JSON API at https://edstem.org/api using the personal
+token stored at ~/.config/edstem-cli/token. The token is read only; it is never
+printed, logged, or written into any output file.
+
+Outputs written to DEST:
+  threads.jsonl    one full thread object per line (raw API payload)
+  threads_index.md index table of every thread
+  corpus.md        human-readable compilation of bodies + answers + comments
+  README.md        provenance, counts, field notes
+
+Re-running resumes: thread IDs already present in threads.jsonl are skipped.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+
+BASE = "https://edstem.org/api"
+TOKEN_PATH = os.path.expanduser("~/.config/edstem-cli/token")
+STAFF_ROLES = {"admin", "staff", "teacher", "instructor", "ta", "moderator"}
+
+
+# ---------------------------------------------------------------- transport
+
+def load_token():
+    if not os.path.exists(TOKEN_PATH):
+        sys.exit(f"no token file at {TOKEN_PATH}; run ed-setup first")
+    with open(TOKEN_PATH) as fh:
+        tok = fh.read().strip()
+    if not tok:
+        sys.exit("token file is empty")
+    return tok
+
+
+class Ed:
+    def __init__(self, token, delay=1.0):
+        self.token = token
+        self.delay = delay
+
+    def get(self, path, retries=4):
+        url = BASE + path
+        for attempt in range(retries):
+            req = urllib.request.Request(url, headers={
+                "Authorization": "Bearer " + self.token,
+                "Accept": "application/json",
+                "User-Agent": "ed-archive/1.0",
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    return json.load(resp)
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < retries - 1:
+                    wait = 5 * (attempt + 1)
+                    print(f"    [429] rate limited, sleeping {wait}s", flush=True)
+                    time.sleep(wait)
+                    continue
+                if e.code in (500, 502, 503, 504) and attempt < retries - 1:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                sys.exit(f"HTTP {e.code} on {url}: {e.read()[:200]!r}")
+            except (urllib.error.URLError, TimeoutError) as e:
+                if attempt < retries - 1:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                sys.exit(f"network error on {url}: {e}")
+        raise RuntimeError("unreachable")
+
+    def enumerate(self, cid, sort="new"):
+        """Paginate every thread in a course. Returns list of list-objects."""
+        out, seen, offset = [], set(), 0
+        while True:
+            data = self.get(f"/courses/{cid}/threads?limit=100&offset={offset}&sort={sort}")
+            batch = data.get("threads", []) if isinstance(data, dict) else data
+            if not batch:
+                break
+            fresh = 0
+            for t in batch:
+                if t.get("id") not in seen:
+                    seen.add(t.get("id"))
+                    out.append(t)
+                    fresh += 1
+            print(f"    list offset={offset:<5} batch={len(batch):<4} total={len(out)}", flush=True)
+            if len(batch) < 100:
+                break
+            offset += 100
+            time.sleep(self.delay)
+        return out
+
+
+# ------------------------------------------------------------------ helpers
+
+def to_text(obj):
+    """Plain text for a thread/answer/comment node."""
+    if not obj:
+        return ""
+    txt = (obj.get("document") or "").strip()
+    if txt:
+        return txt
+    html = obj.get("content") or ""
+    html = re.sub(r"</?(document|paragraph|bold|italic|code|list|item)[^>]*>", "\n", html)
+    html = re.sub(r"<[^>]+>", "", html)
+    html = html.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    html = html.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
+    return re.sub(r"\n{3,}", "\n\n", html).strip()
+
+
+def fmt_date(iso):
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso
+
+
+def collect_users(records):
+    """user_id -> {name, role} across every record."""
+    table = {}
+    for rec in records:
+        for u in rec.get("users", []) or []:
+            uid = u.get("id")
+            if uid is None:
+                continue
+            role = u.get("course_role") or u.get("role") or ""
+            prev = table.get(uid)
+            if prev is None or (prev["role"] not in STAFF_ROLES and role in STAFF_ROLES):
+                table[uid] = {"name": u.get("name") or f"user {uid}", "role": role}
+    return table
+
+
+def who(users, uid):
+    if uid is None:
+        return "anonymous", False
+    info = users.get(uid)
+    if not info:
+        return f"user {uid}", False
+    return info["name"], info["role"] in STAFF_ROLES
+
+
+def link(cid, tid):
+    return f"https://edstem.org/au/courses/{cid}/discussion/{tid}"
+
+
+def node_block(node, users, indent=""):
+    """Render one answer/comment node (with nested comments) as Markdown."""
+    author, is_staff = who(users, node.get("user_id"))
+    if node.get("is_anonymous"):
+        author = "Anonymous"
+    tag = " [staff]" if is_staff else ""
+    lines = [f"{indent}**{author}**{tag} · {fmt_date(node.get('created_at'))}"]
+    body = to_text(node)
+    if body:
+        lines.append("")
+        for para in body.split("\n\n"):
+            lines.append(f"{indent}{para.strip()}")
+    for child in node.get("comments") or []:
+        lines.append("")
+        lines.append(node_block(child, users, indent + "> "))
+    return "\n".join(lines)
+
+
+def render_thread(t, users, cid):
+    num = t.get("number")
+    title = (t.get("title") or "").strip()
+    author, is_staff = who(users, t.get("user_id"))
+    if t.get("is_anonymous"):
+        author = "Anonymous (student)"
+    cat = t.get("category") or "Uncategorised"
+    sub = t.get("subcategory") or ""
+    if sub:
+        cat = f"{cat} / {sub}"
+
+    marks = []
+    if t.get("is_pinned"):
+        marks.append("pinned")
+    if t.get("is_locked"):
+        marks.append("locked")
+    if t.get("is_staff_answered"):
+        marks.append("staff-answered")
+    elif t.get("is_answered"):
+        marks.append("answered")
+    else:
+        marks.append("unanswered")
+
+    out = [
+        f"## [{cat}] #{num} {title}",
+        "",
+        f"- Author: {author}{' [staff]' if is_staff else ''}",
+        f"- Posted: {fmt_date(t.get('created_at'))}",
+        f"- Views {t.get('view_count', 0)} · Replies {t.get('reply_count', 0)} · Votes {t.get('vote_count', 0)}",
+        f"- Status: {', '.join(marks)}",
+        f"- Link: {link(cid, t.get('id'))}",
+        "",
+        "**Question**",
+        "",
+    ]
+    body = to_text(t)
+    out.append(body if body else "_(no body)_")
+    out.append("")
+
+    answers = t.get("answers") or []
+    if answers:
+        out.append(f"### Answers ({len(answers)})")
+        out.append("")
+        for a in answers:
+            endorsed = " (endorsed)" if a.get("is_endorsed") else ""
+            head, staff_flag = who(users, a.get("user_id"))
+            if a.get("is_anonymous"):
+                head = "Anonymous"
+            out.append(f"#### {head}{' [staff]' if staff_flag else ''}{endorsed}")
+            out.append("")
+            ab = to_text(a)
+            out.append(ab if ab else "_(empty)_")
+            for c in a.get("comments") or []:
+                out.append("")
+                out.append(node_block(c, users, "> "))
+            out.append("")
+
+    comments = t.get("comments") or []
+    if comments:
+        out.append(f"### Comments ({len(comments)})")
+        out.append("")
+        for c in comments:
+            out.append(node_block(c, users, ""))
+            out.append("")
+
+    out.append("---")
+    out.append("")
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------- main
+
+def main():
+    ap = argparse.ArgumentParser(description="Archive an Ed Discussion course.")
+    ap.add_argument("code", help="course code, e.g. UNIT1001")
+    ap.add_argument("cid", type=int, help="Ed numeric course ID")
+    ap.add_argument("dest", help="output directory")
+    ap.add_argument("--delay", type=float, default=1.0, help="seconds between requests")
+    ap.add_argument("--list-only", action="store_true", help="index threads but skip bodies")
+    args = ap.parse_args()
+
+    os.makedirs(args.dest, exist_ok=True)
+    args.dest = os.path.abspath(args.dest)
+    ed = Ed(load_token(), delay=args.delay)
+
+    print(f"[{args.code}] enumerating course {args.cid} ...", flush=True)
+    listing = ed.enumerate(args.cid)
+    print(f"[{args.code}] {len(listing)} threads listed", flush=True)
+
+    if args.list_only:
+        with open(os.path.join(args.dest, "list_raw.json"), "w") as fh:
+            json.dump(listing, fh, ensure_ascii=False, indent=2)
+        return
+
+    jsonl_path = os.path.join(args.dest, "threads.jsonl")
+    done = set()
+    if os.path.exists(jsonl_path):
+        with open(jsonl_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    done.add(json.loads(line)["thread"]["id"])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        print(f"[{args.code}] resuming, {len(done)} already archived", flush=True)
+
+    todo = [t for t in listing if t.get("id") not in done]
+    print(f"[{args.code}] fetching {len(todo)} thread bodies (delay {args.delay}s)", flush=True)
+
+    with open(jsonl_path, "a") as fh:
+        for i, meta in enumerate(todo, 1):
+            tid = meta.get("id")
+            try:
+                rec = ed.get(f"/threads/{tid}")
+            except SystemExit:
+                raise
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            fh.flush()
+            if i % 10 == 0 or i == len(todo):
+                print(f"    {i}/{len(todo)}", flush=True)
+            time.sleep(args.delay)
+
+    # ---------------------------------------------------------- build docs
+    records, seen = [], set()
+    with open(jsonl_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            tid = rec.get("thread", {}).get("id")
+            if tid in seen:
+                continue
+            seen.add(tid)
+            records.append(rec)
+
+    threads = [r["thread"] for r in records if r.get("thread")]
+    threads.sort(key=lambda t: (t.get("category") or "zzz", t.get("number") or 0))
+    users = collect_users(records)
+
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    answered = sum(1 for t in threads if t.get("is_answered"))
+    staff_ans = sum(1 for t in threads if t.get("is_staff_answered"))
+
+    # corpus.md
+    parts = [
+        f"# {args.code} — Ed Discussion 讨论归档",
+        "",
+        f"> 课程 ID `{args.cid}` ｜ 共 **{len(threads)}** 条讨论 ｜ 归档于 {stamp}",
+        f"> 已解答 {answered} 条 ｜ 教学团队解答 {staff_ans} 条 ｜ 涉及 {len(users)} 位参与者",
+        "",
+        "## 使用说明",
+        "",
+        "- 本文件由 `ed-archive` 从 Ed 官方 JSON API 自动生成，**可重复运行以增量更新**。",
+        f"- 更新命令：`ed-archive {args.code} {args.cid} {args.dest}`（已归档的帖子会自动跳过，只抓新增）。",
+        "- 每条讨论按「分类 + 编号」排序，结构为：元信息 → Question（原帖）→ Answers（回答，含嵌套评论）。",
+        "- 人名后的 `[staff]` 表示该发言者为教学团队成员（course role = admin/staff）。",
+        "- 正文保留 Ed 原始英文，未做改写；人名与时间均为 Ed 上显示的原值。",
+        "",
+        "---",
+        "",
+    ]
+    for t in threads:
+        parts.append(render_thread(t, users, args.cid))
+    with open(os.path.join(args.dest, "ed_discussions.md"), "w") as fh:
+        fh.write("\n".join(parts))
+
+    # threads_index.md
+    idx = [
+        f"# {args.code} — Thread Index",
+        "",
+        f"{len(threads)} threads · archived {stamp}",
+        "",
+        "| # | Category | Title | Author | Posted | Status | Replies | Link |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for t in threads:
+        author, is_staff = who(users, t.get("user_id"))
+        if t.get("is_anonymous"):
+            author = "Anonymous"
+        status = "staff-answered" if t.get("is_staff_answered") else (
+            "answered" if t.get("is_answered") else "unanswered")
+        title = (t.get("title") or "").replace("|", "\\|")
+        idx.append(
+            f"| {t.get('number')} | {t.get('category') or ''} | {title} | {author}"
+            f"{' [staff]' if is_staff else ''} | {fmt_date(t.get('created_at'))[:10]}"
+            f" | {status} | {t.get('reply_count', 0)} | [link]({link(args.cid, t.get('id'))}) |"
+        )
+    with open(os.path.join(args.dest, "threads_index.md"), "w") as fh:
+        fh.write("\n".join(idx) + "\n")
+
+    # README.md
+    cats = {}
+    for t in threads:
+        cats[t.get("category") or "Uncategorised"] = cats.get(t.get("category") or "Uncategorised", 0) + 1
+    readme = [
+        f"# {args.code} — Ed archive",
+        "",
+        f"- Ed course ID: `{args.cid}`",
+        f"- Threads archived: **{len(threads)}**",
+        f"- Answered: {answered} · staff-answered: {staff_ans}",
+        f"- Archived at: {stamp}",
+        f"- Source: official Ed JSON API (`https://edstem.org/api`)",
+        "",
+        "## Files",
+        "",
+        "| File | Contents |",
+        "|---|---|",
+        "| `ed_discussions.md` | 全部讨论全文：原帖、回答、嵌套评论（主要交付物，可直接搜索） |",
+        "| `threads_index.md` | One-row-per-thread index with links |",
+        "| `threads.jsonl` | Raw API payload per thread (machine-readable) |",
+        "| `threads_index.json` | Flat list metadata (code, category, flags) |",
+        "",
+        "## Categories",
+        "",
+        "| Category | Threads |",
+        "|---|---|",
+    ]
+    for c, n in sorted(cats.items(), key=lambda kv: -kv[1]):
+        readme.append(f"| {c} | {n} |")
+    with open(os.path.join(args.dest, "README.md"), "w") as fh:
+        fh.write("\n".join(readme) + "\n")
+
+    with open(os.path.join(args.dest, "threads_index.json"), "w") as fh:
+        json.dump(listing, fh, ensure_ascii=False, indent=2)
+
+    print(f"[{args.code}] done: {len(threads)} threads -> {args.dest}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

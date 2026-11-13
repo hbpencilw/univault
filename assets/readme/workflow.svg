@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" role="img" aria-labelledby="flowTitle flowDesc">
+  <title id="flowTitle">UniVault data flow</title>
+  <desc id="flowDesc">Ed Discussion and Moodle archives feed univault-normalize, which produces one univault.jsonl corpus for agents and local search. Icons: Lucide (ISC).</desc>
+
+  <!-- Icons: Lucide (ISC) — https://lucide.dev -->
+  <rect width="1200" height="280" fill="#000000"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif">
+    <!-- card 1: Ed -->
+    <rect x="64" y="52" width="244" height="176" rx="18" fill="#1C1C1E"/>
+    <g stroke="#0A84FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="88" y="76" width="26" height="26" viewBox="0 0 24 24">
+        <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        <path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/>
+      </svg>
+    </g>
+    <text x="88" y="132" font-size="22" font-weight="600" fill="#FFFFFF">Ed Discussion</text>
+    <text x="88" y="158" font-size="17" fill="#EBEBF5" opacity="0.6">threads · answers</text>
+    <text x="88" y="182" font-size="17" fill="#EBEBF5" opacity="0.6">Lessons · PDFs</text>
+    <text x="88" y="206" font-size="15" font-weight="500" fill="#0A84FF">API token</text>
+
+    <!-- card 2: Moodle -->
+    <rect x="340" y="52" width="244" height="176" rx="18" fill="#1C1C1E"/>
+    <g stroke="#30D158" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="364" y="76" width="26" height="26" viewBox="0 0 24 24">
+        <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/>
+        <path d="M22 10v6"/>
+        <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>
+      </svg>
+    </g>
+    <text x="364" y="132" font-size="22" font-weight="600" fill="#FFFFFF">Moodle</text>
+    <text x="364" y="158" font-size="17" fill="#EBEBF5" opacity="0.6">files · pages · labels</text>
+    <text x="364" y="182" font-size="17" fill="#EBEBF5" opacity="0.6">notices · deadlines</text>
+    <text x="364" y="206" font-size="15" font-weight="500" fill="#30D158">scan then sync</text>
+
+    <!-- card 3: Normalize -->
+    <rect x="616" y="52" width="244" height="176" rx="18" fill="#1C1C1E"/>
+    <g stroke="#0A84FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="640" y="76" width="26" height="26" viewBox="0 0 24 24">
+        <circle cx="18" cy="18" r="3"/>
+        <circle cx="6" cy="6" r="3"/>
+        <path d="M6 21V9a9 9 0 0 0 9 9"/>
+      </svg>
+    </g>
+    <text x="640" y="132" font-size="22" font-weight="600" fill="#FFFFFF">Normalize</text>
+    <text x="640" y="158" font-size="17" fill="#EBEBF5" opacity="0.6">merge · dedupe</text>
+    <text x="640" y="182" font-size="17" fill="#EBEBF5" opacity="0.6">one schema</text>
+    <text x="640" y="206" font-size="15" font-weight="500" fill="#0A84FF">content hashes</text>
+
+    <!-- card 4: JSONL -->
+    <rect x="892" y="52" width="244" height="176" rx="18" fill="#1C1C1E"/>
+    <g stroke="#FF9F0A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <svg x="916" y="76" width="26" height="26" viewBox="0 0 24 24">
+        <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/>
+        <path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>
+      </svg>
+    </g>
+    <text x="916" y="132" font-size="22" font-weight="600" fill="#FFFFFF">univault.jsonl</text>
+    <text x="916" y="158" font-size="17" fill="#EBEBF5" opacity="0.6">one local corpus</text>
+    <text x="916" y="182" font-size="17" fill="#EBEBF5" opacity="0.6">versioned history</text>
+    <text x="916" y="206" font-size="15" font-weight="500" fill="#FF9F0A">agents + grep / jq</text>
+
+    <!-- chevrons -->
+    <g fill="#636366" font-size="34">
+      <text x="314" y="148">›</text>
+      <text x="590" y="148">›</text>
+      <text x="866" y="148">›</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,20 @@
+{
+  "name": "univault-marketplace",
+  "description": "Official UniVault plugin marketplace.",
+  "plugins": [
+    {
+      "name": "univault",
+      "source": ".",
+      "version": "0.3.1-beta",
+      "description": "Archive Ed Discussion (threads and Lessons) and Moodle (announcements, files, pages, labels) into a versioned local corpus. Monash first, then Go8.",
+      "displayName": "UniVault",
+      "displayName_i18n": {
+        "zh-CN": "UniVault 课程归档库"
+      },
+      "description_i18n": {
+        "zh-CN": "归档 Ed Discussion（讨论帖与 Lessons）与 Moodle（公告、文件、页面、Label）为本地版本化语料库。"
+      },
+      "category": "productivity"
+    }
+  ]
+}
